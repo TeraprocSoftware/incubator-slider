@@ -129,10 +129,10 @@ public class ContainerStatsBlock extends SliderHamletBlock {
               
               if (containerInstances.containsKey(containerId)) {
                 RoleInstance roleInst = containerInstances.get(containerId);
-                if (roleInst.container.getNodeHttpAddress() != null) {
+                if (roleInst.getContainer().getNodeHttpAddress() != null) {
                   return Maps.<TableContent,String> immutableEntry(
                     new TableAnchorContent(containerId,
-                        buildNodeUrlForContainer(roleInst.container.getNodeHttpAddress(), containerId)), null);
+                        buildNodeUrlForContainer(roleInst.getContainer().getNodeHttpAddress(), containerId)), null);
                 }
               }
               return Maps.immutableEntry(new TableContent(input.name), null);

@@ -35,6 +35,8 @@ public interface Arguments {
   String ARG_BASE_PATH = "--basepath";
   String ARG_CLIENT = "--client";
   String ARG_CONFDIR = "--appconf";
+  String ARG_CONTAINER_MEM = "--memory";
+  String ARG_CONTAINER_VCORES = "--vcores";
   String ARG_COMPONENT = "--component";
   String ARG_COMPONENT_SHORT = "--comp";
   String ARG_COMPONENTS = "--components";

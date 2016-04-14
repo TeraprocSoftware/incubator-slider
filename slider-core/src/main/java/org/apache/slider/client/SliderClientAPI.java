@@ -42,6 +42,7 @@ import org.apache.slider.common.params.ActionPackageArgs;
 import org.apache.slider.common.params.ActionKillContainerArgs;
 import org.apache.slider.common.params.ActionListArgs;
 import org.apache.slider.common.params.ActionRegistryArgs;
+import org.apache.slider.common.params.ActionResizeContainerArgs;
 import org.apache.slider.common.params.ActionResolveArgs;
 import org.apache.slider.common.params.ActionStatusArgs;
 import org.apache.slider.common.params.ActionThawArgs;
@@ -243,6 +244,17 @@ public interface SliderClientAPI extends Service {
    * @throws IOException
    */
   int actionKillContainer(String name, ActionKillContainerArgs args)
+      throws YarnException, IOException;
+
+  /**
+   * Kill a specific container of the cluster
+   * @param name cluster name
+   * @param args arguments
+   * @return exit code
+   * @throws YarnException
+   * @throws IOException
+   */
+  int actionResizeContainer(String name, ActionResizeContainerArgs args)
       throws YarnException, IOException;
 
   /**

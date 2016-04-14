@@ -110,6 +110,17 @@ public interface SliderClusterProtocol extends VersionedProtocol {
       throws IOException, YarnException;
 
   /**
+   * Change resource of an identified container
+   * @param request request containing the container to be resized
+   * @return the response
+   * @throws IOException
+   * @throws YarnException
+   */
+  Messages.ResizeContainersResponseProto resizeContainer(
+      Messages.ResizeContainersRequestProto request)
+      throws IOException, YarnException;
+
+  /**
    * AM to commit suicide. If the Hadoop halt entry point has not been disabled,
    * this will fail rather than return with a response.
    * @param request request

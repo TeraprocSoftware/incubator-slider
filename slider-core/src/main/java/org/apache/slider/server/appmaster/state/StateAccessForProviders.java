@@ -20,6 +20,7 @@ package org.apache.slider.server.appmaster.state;
 
 import org.apache.hadoop.yarn.api.records.Container;
 import org.apache.hadoop.yarn.api.records.ContainerId;
+import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.exceptions.YarnRuntimeException;
 import org.apache.slider.api.ClusterDescription;
 import org.apache.slider.api.ClusterNode;
@@ -100,6 +101,20 @@ public interface StateAccessForProviders {
    * @return the live nodes
    */
   Map<ContainerId, RoleInstance> getLiveContainers();
+
+  /**
+   * Get the maximum resource of a container.
+   *
+   * @return the maximum resource
+   */
+  Resource getMaxContainerResource();
+
+  /**
+   * Get the minimum resource of a container.
+   *
+   * @return the minimum resource
+   */
+  Resource getMinContainerResource();
 
   /**
    * Get the current cluster description 

@@ -27,6 +27,7 @@ import org.apache.hadoop.service.ServiceStateChangeListener
 import org.apache.hadoop.yarn.api.records.Container
 import org.apache.hadoop.yarn.api.records.ContainerId
 import org.apache.hadoop.yarn.api.records.Priority
+import org.apache.hadoop.yarn.api.records.Resource
 import org.apache.hadoop.yarn.client.api.AMRMClient
 import org.apache.slider.api.ClusterDescription
 import org.apache.slider.common.tools.SliderFileSystem
@@ -273,6 +274,12 @@ class MockProviderService implements ProviderService {
 
   @Override
   public void addContainerRequest(AMRMClient.ContainerRequest req) {
+    // no-op
+  }
+
+  @Override
+  public void requestContainerResourceChange(
+      Container container, Resource capability) {
     // no-op
   }
 

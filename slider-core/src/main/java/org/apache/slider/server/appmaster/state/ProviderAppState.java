@@ -20,6 +20,7 @@ package org.apache.slider.server.appmaster.state;
 
 import org.apache.hadoop.yarn.api.records.Container;
 import org.apache.hadoop.yarn.api.records.ContainerId;
+import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.exceptions.YarnRuntimeException;
 import org.apache.slider.api.ClusterDescription;
 import org.apache.slider.api.ClusterNode;
@@ -127,6 +128,16 @@ public class ProviderAppState implements StateAccessForProviders {
   @Override
   public Map<ContainerId, RoleInstance> getLiveContainers() {
     return appState.getLiveContainers();
+  }
+
+  @Override
+  public Resource getMaxContainerResource() {
+    return appState.getMaxContainerResource();
+  }
+
+  @Override
+  public Resource getMinContainerResource() {
+    return appState.getMinContainerResource();
   }
 
   @Override

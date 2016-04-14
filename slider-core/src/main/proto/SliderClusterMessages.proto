@@ -80,6 +80,16 @@ message UpgradeContainersRequestProto {
 message UpgradeContainersResponseProto {
 }
 
+message ResizeContainersRequestProto {
+  optional ResourceProto targetResource = 1;
+  repeated string container = 2;
+  repeated string component = 3;
+}
+
+message ResizeContainersResponseProto {
+  optional bool success = 1;
+}
+
 /**
  * flex the cluster
  */
@@ -166,6 +176,10 @@ message EchoResponseProto {
   required string text = 1;
 }
 
+message ResourceProto {
+  optional int32 memory = 1;
+  optional int32 virtual_cores = 2;
+}
 
 /**
  * Kill a container

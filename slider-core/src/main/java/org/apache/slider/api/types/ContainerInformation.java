@@ -42,6 +42,8 @@ public class ContainerInformation {
   public String host;
   public String hostURL;
   public String placement;
+
+
   /**
    * What is the tail output from the executed process (or [] if not started
    * or the log cannot be picked up

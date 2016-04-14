@@ -58,6 +58,7 @@ import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
 import org.apache.hadoop.yarn.api.records.LocalResource;
 import org.apache.hadoop.yarn.api.records.NodeReport;
 import org.apache.hadoop.yarn.api.records.NodeState;
+import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.api.records.YarnApplicationState;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.ApplicationAttemptNotFoundException;
@@ -100,6 +101,7 @@ import org.apache.slider.common.params.ActionLookupArgs;
 import org.apache.slider.common.params.ActionNodesArgs;
 import org.apache.slider.common.params.ActionPackageArgs;
 import org.apache.slider.common.params.ActionRegistryArgs;
+import org.apache.slider.common.params.ActionResizeContainerArgs;
 import org.apache.slider.common.params.ActionResolveArgs;
 import org.apache.slider.common.params.ActionStatusArgs;
 import org.apache.slider.common.params.ActionThawArgs;
@@ -407,6 +409,11 @@ public class SliderClient extends AbstractSliderLaunchedService implements RunSe
         exitCode = actionKillContainer(clusterName,
             serviceArgs.getActionKillContainerArgs());
         break;
+
+      case ACTION_RESIZE_CONTAINERS:
+        exitCode = actionResizeContainer(clusterName,
+            serviceArgs.getActionResizeContainerArgs());
+      break;
 
       case ACTION_INSTALL_KEYTAB:
         exitCode = actionInstallKeytab(serviceArgs.getActionInstallKeytabArgs());
@@ -730,6 +737,39 @@ public class SliderClient extends AbstractSliderLaunchedService implements RunSe
   }
 
   @Override
+  public int actionResizeContainer(String name, ActionResizeContainerArgs args)
+      throws YarnException, IOException {
+    // not an error to try to resize a stopped cluster, just return success
+    // code, appropriate log messages have already been dumped
+    if (!isAppInRunningState(name)) {
+      return EXIT_SUCCESS;
+    }
+
+    int memory = args.memory;
+    int vCores = args.vCores;
+    Set<String> containers = new HashSet<>();
+    Set<String> components = new HashSet<>();
+
+    containers.addAll(args.containers);
+    components.addAll(args.components);
+    if (containers.isEmpty() && components.isEmpty()) {
+      return EXIT_NOT_FOUND;
+    }
+    // check validity of component names and running containers here
+    Set<String> validContainers = new HashSet<>();
+    Set<String> validComponents = new HashSet<>();
+    if (!getValidContainersAndComponents(name,
+        containers, components, validContainers, validComponents)) {
+      return EXIT_NOT_FOUND;
+    }
+    SliderClusterOperations clusterOps =
+        new SliderClusterOperations(bondToCluster(name));
+    clusterOps.resizeContainer(
+        Resource.newInstance(memory, vCores), validContainers, validComponents);
+    return EXIT_SUCCESS;
+  }
+
+  @Override
   public int actionUpgrade(String clustername, ActionUpgradeArgs upgradeArgs)
       throws YarnException, IOException {
     File template = upgradeArgs.template;
@@ -809,44 +849,14 @@ public class SliderClient extends AbstractSliderLaunchedService implements RunSe
       components.addAll(new ArrayList<>(upgradeArgs.components));
     }
 
+    if (containers.isEmpty() && components.isEmpty()) {
+      return EXIT_NOT_FOUND;
+    }
     // check validity of component names and running containers here
-    List<ContainerInformation> liveContainers = getContainers(clustername);
     Set<String> validContainers = new HashSet<>();
     Set<String> validComponents = new HashSet<>();
-    for (ContainerInformation liveContainer : liveContainers) {
-      boolean allContainersAndComponentsAccountedFor = true;
-      if (CollectionUtils.isNotEmpty(containers)) {
-        if (containers.contains(liveContainer.containerId)) {
-          containers.remove(liveContainer.containerId);
-          validContainers.add(liveContainer.containerId);
-        }
-        allContainersAndComponentsAccountedFor = false;
-      }
-      if (CollectionUtils.isNotEmpty(components)) {
-        if (components.contains(liveContainer.component)) {
-          components.remove(liveContainer.component);
-          validComponents.add(liveContainer.component);
-        }
-        allContainersAndComponentsAccountedFor = false;
-      }
-      if (allContainersAndComponentsAccountedFor) {
-        break;
-      }
-    }
-
-    // If any item remains in containers or components then they are invalid.
-    // Log warning for them and proceed.
-    if (CollectionUtils.isNotEmpty(containers)) {
-      log.warn("Invalid set of containers provided {}", containers);
-    }
-    if (CollectionUtils.isNotEmpty(components)) {
-      log.warn("Invalid set of components provided {}", components);
-    }
-
-    // If not a single valid container or component is specified do not proceed
-    if (CollectionUtils.isEmpty(validContainers)
-        && CollectionUtils.isEmpty(validComponents)) {
-      log.error("Not a single valid container or component specified. Nothing to do.");
+    if (!getValidContainersAndComponents(clustername,
+        containers, components, validContainers, validComponents)) {
       return EXIT_NOT_FOUND;
     }
 
@@ -902,7 +912,54 @@ public class SliderClient extends AbstractSliderLaunchedService implements RunSe
     return true;
   }
 
-  protected static void checkForCredentials(Configuration conf,
+  private boolean getValidContainersAndComponents(String clustername,
+      Set<String> containers, Set<String> components,
+      Set<String> validContainers, Set<String> validComponents)
+      throws YarnException, IOException {
+    // check validity of component names and running containers here
+    List<ContainerInformation> liveContainers = getContainers(clustername);
+    for (ContainerInformation liveContainer : liveContainers) {
+      boolean allContainersAndComponentsAccountedFor = true;
+      if (CollectionUtils.isNotEmpty(containers)) {
+        if (containers.contains(liveContainer.containerId)) {
+          containers.remove(liveContainer.containerId);
+          validContainers.add(liveContainer.containerId);
+        }
+        allContainersAndComponentsAccountedFor = false;
+      }
+      if (CollectionUtils.isNotEmpty(components)) {
+        if (components.contains(liveContainer.component)) {
+          components.remove(liveContainer.component);
+          validComponents.add(liveContainer.component);
+        }
+        allContainersAndComponentsAccountedFor = false;
+      }
+      if (allContainersAndComponentsAccountedFor) {
+        break;
+      }
+    }
+
+    // If any item remains in containers or components then they are invalid.
+    // Log warning for them and proceed.
+    if (CollectionUtils.isNotEmpty(containers)) {
+      log.warn("Invalid set of containers provided {}", containers);
+    }
+    if (CollectionUtils.isNotEmpty(components)) {
+      log.warn("Invalid set of components provided {}", components);
+    }
+
+    // If not a single valid container or component is specified do not proceed
+    if (CollectionUtils.isEmpty(validContainers)
+        && CollectionUtils.isEmpty(validComponents)) {
+      log.error("Not a single valid container or component specified. "
+          + "Nothing to do.");
+      return false;
+    }
+
+    return true;
+  }
+
+  private static void checkForCredentials(Configuration conf,
       ConfTree tree) throws IOException {
     if (tree.credentials == null || tree.credentials.isEmpty()) {
       log.info("No credentials requested");

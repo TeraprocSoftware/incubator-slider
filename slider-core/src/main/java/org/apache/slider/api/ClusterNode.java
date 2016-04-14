@@ -19,6 +19,7 @@
 package org.apache.slider.api;
 
 import org.apache.hadoop.yarn.api.records.ContainerId;
+import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.slider.api.proto.Messages;
 import org.codehaus.jackson.JsonParseException;
 import org.codehaus.jackson.annotate.JsonIgnore;
@@ -100,6 +101,10 @@ public final class ClusterNode implements Cloneable {
    * Any environment details
    */
   public String[] environment;
+
+  public int memory;
+
+  public int vCores;
 
   /**
    * server-side ctor takes the container ID and builds the name from it

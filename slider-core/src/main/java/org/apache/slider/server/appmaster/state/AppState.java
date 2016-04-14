@@ -66,6 +66,9 @@ import org.apache.slider.core.persist.ConfTreeSerDeser;
 import org.apache.slider.providers.PlacementPolicy;
 import org.apache.slider.providers.ProviderRole;
 import org.apache.slider.server.appmaster.management.LongGauge;
+import org.apache.slider.server.appmaster.actions
+    .ActionIncreaseContainerResource;
+import org.apache.slider.server.appmaster.actions.AsyncAction;
 import org.apache.slider.server.appmaster.management.MetricsAndMonitoring;
 import org.apache.slider.server.appmaster.management.MetricsConstants;
 import org.apache.slider.server.appmaster.operations.AbstractRMOperation;
@@ -85,6 +88,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.slider.api.ResourceKeys.*;
@@ -468,6 +472,14 @@ public class AppState {
     containerMaxMemory = maxMemory;
     minResource = recordFactory.newResource(containerMinMemory, containerMinCores);
     maxResource = recordFactory.newResource(containerMaxMemory, containerMaxCores);
+  }
+
+  public Resource getMaxContainerResource() {
+      return maxResource;
+  }
+
+  public Resource getMinContainerResource() {
+    return minResource;
   }
 
   public ConfTreeOperations getResourcesSnapshot() {
@@ -1107,7 +1119,7 @@ public class AppState {
    * Build an instance map.
    * @return the map of Role name to list of role instances
    */
-  private synchronized Map<String, List<String>> createRoleToInstanceMap() {
+  public synchronized Map<String, List<String>> createRoleToInstanceMap() {
     Map<String, List<String>> map = new HashMap<String, List<String>>();
     for (RoleInstance node : getLiveContainers().values()) {
       List<String> containers = map.get(node.role);
@@ -1149,7 +1161,6 @@ public class AppState {
   public void containerStartSubmitted(Container container,
                                       RoleInstance instance) {
     instance.state = STATE_SUBMITTED;
-    instance.container = container;
     instance.createTime = now();
     getStartingContainers().put(container.getId(), instance);
     putOwnedContainer(container.getId(), instance);
@@ -1180,7 +1191,7 @@ public class AppState {
         "Container %s already queued for release", id);
     }
     instance.released = true;
-    containersBeingReleased.put(id, instance.container);
+    containersBeingReleased.put(id, instance.getContainer());
     RoleStatus role = lookupRoleStatus(instance.roleId);
     role.incReleasing();
     roleHistory.onContainerReleaseSubmitted(container);
@@ -1318,18 +1329,16 @@ public class AppState {
 
   /**
    * add a launched container to the node map for status responses
-   * @param container id
    * @param node node details
    */
-  private void addLaunchedContainer(Container container, RoleInstance node) {
-    node.container = container;
+  private void addLaunchedContainer(RoleInstance node) {
     if (node.role == null) {
       throw new RuntimeException(
         "Unknown role for node " + node);
     }
     getLiveContainers().put(node.getContainerId(), node);
     //tell role history
-    roleHistory.onContainerStarted(container);
+    roleHistory.onContainerStarted(node.getContainer());
   }
 
   /**
@@ -1376,8 +1385,7 @@ public class AppState {
     instance.state = STATE_LIVE;
     RoleStatus roleStatus = lookupRoleStatus(instance.roleId);
     roleStatus.incStarted();
-    Container container = instance.container;
-    addLaunchedContainer(container, instance);
+    addLaunchedContainer(instance);
     return instance;
   }
 
@@ -1408,7 +1416,7 @@ public class AppState {
       instance.diagnostics = text;
       roleStatus.noteFailed(true, text, ContainerOutcome.Failed);
       getFailedContainers().put(containerId, instance);
-      roleHistory.onNodeManagerContainerStartFailed(instance.container);
+      roleHistory.onNodeManagerContainerStartFailed(instance.getContainer());
     }
   }
 
@@ -1554,7 +1562,7 @@ public class AppState {
           roleStatus.decActual();
           boolean shortLived = isShortLived(roleInstance);
           String message;
-          Container failedContainer = roleInstance.container;
+          Container failedContainer = roleInstance.getContainer();
 
           //build the failure message
           if (failedContainer != null) {
@@ -2068,7 +2076,7 @@ public class AppState {
         // then build up a release operation, logging each container as released
         for (RoleInstance possible : finalCandidates) {
           log.info("Targeting for release: {}", possible);
-          containerReleaseSubmitted(possible.container);
+          containerReleaseSubmitted(possible.getContainer());
           operations.add(new ContainerReleaseOperation(possible.getId()));
         }
       }
@@ -2120,8 +2128,8 @@ public class AppState {
     List<AbstractRMOperation> operations = new ArrayList<AbstractRMOperation>();
     List<RoleInstance> activeRoleInstances = cloneOwnedContainerList();
     for (RoleInstance role : activeRoleInstances) {
-      if (role.container.getId().equals(containerId)) {
-        containerReleaseSubmitted(role.container);
+      if (role.getContainerId().equals(containerId)) {
+        containerReleaseSubmitted(role.getContainer());
         operations.add(new ContainerReleaseOperation(role.getId()));
       }
     }
@@ -2142,7 +2150,7 @@ public class AppState {
     Collection<RoleInstance> targets = cloneOwnedContainerList();
     String hostname = node.hostname;
     for (RoleInstance ri : targets) {
-      if (hostname.equals(RoleHistoryUtils.hostnameOf(ri.container))
+      if (hostname.equals(RoleHistoryUtils.hostnameOf(ri.getContainer()))
                          && ri.roleId == roleId
         && containersBeingReleased.get(ri.getContainerId()) == null) {
         return ri;
@@ -2166,7 +2174,7 @@ public class AppState {
         // don't worry about the AM
         continue;
       }
-      Container possible = instance.container;
+      Container possible = instance.getContainer();
       ContainerId id = possible.getId();
       if (!instance.released) {
         String url = getLogsURLForContainer(possible);
@@ -2271,6 +2279,28 @@ public class AppState {
     }
   }
 
+  public synchronized  void onContainersResourceChanged(
+      List<Container> changedContainers, List<AsyncAction> actions) {
+    for (Container container : changedContainers) {
+      try {
+        RoleInstance instance =
+            getLiveInstanceByContainerID(container.getId().toString());
+        Resource oldResource = instance.getContainerResource();
+        instance.setContainer(container);
+        log.info("Container {} resource allocation"
+                + " has been changed from {} to {}.", container.getId(),
+            oldResource, container.getResource());
+        if (Resources.fitsIn(oldResource, container.getResource())) {
+          actions.add(new ActionIncreaseContainerResource(
+              "increase resource of container " + container.getId(),
+                  container, 0, TimeUnit.SECONDS));
+        }
+      } catch (NoSuchNodeException e) {
+        log.warn("Container " + container.getId() + " has already finished.");
+      }
+    }
+  }
+
   /**
    * Get diagnostics info about containers
    */
@@ -2337,7 +2367,6 @@ public class AppState {
     instance.role = roleName;
     instance.roleId = roleId;
     instance.environment = new String[0];
-    instance.container = container;
     instance.createTime = now();
     instance.state = STATE_LIVE;
     instance.appVersion = SliderKeys.APP_VERSION_UNKNOWN;

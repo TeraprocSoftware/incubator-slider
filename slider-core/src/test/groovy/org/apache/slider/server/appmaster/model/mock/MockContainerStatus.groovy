@@ -22,6 +22,7 @@ import org.apache.hadoop.yarn.api.records.ContainerId
 import org.apache.hadoop.yarn.api.records.ContainerState
 import org.apache.hadoop.yarn.api.records.ContainerStatus
 import org.apache.hadoop.yarn.api.records.Resource
+import org.apache.hadoop.yarn.api.records.ExecutionType
 
 class MockContainerStatus extends ContainerStatus {
 
@@ -29,6 +30,6 @@ class MockContainerStatus extends ContainerStatus {
   ContainerState state
   String diagnostics
   int exitStatus
-
-  Resource capability;
+  Resource capability
+  ExecutionType executionType
 }

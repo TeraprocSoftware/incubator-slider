@@ -22,6 +22,7 @@ import com.google.common.base.Preconditions;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.service.AbstractService;
 import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
+import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.exceptions.YarnRuntimeException;
 import org.apache.slider.api.ClusterDescription;
@@ -43,6 +44,7 @@ import org.apache.slider.server.appmaster.AppMasterActionOperations;
 import org.apache.slider.server.appmaster.actions.ActionFlexCluster;
 import org.apache.slider.server.appmaster.actions.ActionHalt;
 import org.apache.slider.server.appmaster.actions.ActionKillContainer;
+import org.apache.slider.server.appmaster.actions.ActionRequestContainersResize;
 import org.apache.slider.server.appmaster.actions.ActionStopSlider;
 import org.apache.slider.server.appmaster.actions.ActionUpgradeContainers;
 import org.apache.slider.server.appmaster.actions.AsyncAction;
@@ -212,6 +214,24 @@ public class SliderIPCService extends AbstractService
     return Messages.UpgradeContainersResponseProto.getDefaultInstance();
   }
 
+  @Override
+  public Messages.ResizeContainersResponseProto resizeContainer(
+      Messages.ResizeContainersRequestProto request)
+      throws IOException, YarnException {
+    onRpcCall("resizecontainer");
+    Resource targetResource = Resource.newInstance(
+        request.getTargetResource().getMemory(),
+        request.getTargetResource().getVirtualCores());
+    log.info("Received request to resize containers to {}", targetResource);
+    queue(new ActionRequestContainersResize(
+        targetResource,
+        request.getContainerList(),
+        request.getComponentList(),
+        0, TimeUnit.MILLISECONDS, amOperations));
+    return Messages.ResizeContainersResponseProto.newBuilder().setSuccess(true)
+        .build();
+  }
+
   @Override //SliderClusterProtocol
   public Messages.FlexClusterResponseProto flexCluster(Messages.FlexClusterRequestProto request)
       throws IOException {
@@ -236,6 +256,7 @@ public class SliderIPCService extends AbstractService
     ClusterDescription cd = state.refreshClusterStatus();
     result = cd.toJsonString();
     String stat = result;
+    log.debug("stat = " + stat);
     return Messages.GetJSONClusterStatusResponseProto.newBuilder()
                                                      .setClusterSpec(stat)
                                                      .build();
@@ -340,7 +361,6 @@ public class SliderIPCService extends AbstractService
     builder.setSuccess(true);
     return builder.build();
   }
-
 
   @Override
   public Messages.AMSuicideResponseProto amSuicide(

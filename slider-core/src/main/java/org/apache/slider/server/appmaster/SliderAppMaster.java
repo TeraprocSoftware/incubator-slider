@@ -20,9 +20,6 @@ package org.apache.slider.server.appmaster;
 
 import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.health.HealthCheckRegistry;
-import com.codahale.metrics.jvm.GarbageCollectorMetricSet;
-import com.codahale.metrics.jvm.MemoryUsageGaugeSet;
-import com.codahale.metrics.jvm.ThreadStatesGaugeSet;
 import com.google.common.base.Preconditions;
 import com.google.protobuf.BlockingService;
 
@@ -70,6 +67,8 @@ import static org.apache.hadoop.yarn.conf.YarnConfiguration.*;
 import static org.apache.slider.common.Constants.HADOOP_JAAS_DEBUG;
 
 import org.apache.hadoop.yarn.exceptions.InvalidApplicationMasterRequestException;
+
+import org.apache.hadoop.yarn.exceptions.InvalidResourceRequestException;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.ipc.YarnRPC;
 import org.apache.hadoop.registry.client.api.RegistryOperations;
@@ -109,6 +108,7 @@ import org.apache.slider.core.conf.ConfTree;
 import org.apache.slider.core.conf.ConfTreeOperations;
 import org.apache.slider.core.conf.MapOperations;
 import org.apache.slider.core.exceptions.BadConfigException;
+import org.apache.slider.core.exceptions.NoSuchNodeException;
 import org.apache.slider.core.exceptions.SliderException;
 import org.apache.slider.core.exceptions.SliderInternalStateException;
 import org.apache.slider.core.exceptions.TriggerClusterTeardownException;
@@ -202,10 +202,8 @@ import java.util.concurrent.locks.ReentrantLock;
 /**
  * This is the AM, which directly implements the callbacks from the AM and NM
  */
-public class SliderAppMaster extends AbstractSliderLaunchedService 
-  implements AMRMClientAsync.CallbackHandler,
-    NMClientAsync.CallbackHandler,
-    RunService,
+public class SliderAppMaster extends AbstractSliderLaunchedService
+    implements RunService,
     SliderExitCodes,
     SliderKeys,
     ServiceStateChangeListener,
@@ -419,6 +417,231 @@ public class SliderAppMaster extends AbstractSliderLaunchedService
    * resource limits
    */
   private Resource maximumResourceCapability;
+
+
+
+/* =================================================================== */
+/* AMRMClientAsync callbacks */
+/* =================================================================== */
+  class RMCallbackHandler
+      extends AMRMClientAsync.AbstractCallbackHandler {
+
+    /**
+     * Callback event when a container is allocated.
+     *
+     * The app state is updated with the allocation, and builds up a list
+     * of assignments and RM operations. The assignments are
+     * handed off into the pool of service launchers to asynchronously schedule
+     * container launch operations.
+     *
+     * The operations are run in sequence; they are expected to be 0 or more
+     * release operations (to handle over-allocations)
+     *
+     * @param allocatedContainers list of containers that are now ready to be
+     * given work.
+     */
+    @SuppressWarnings("SynchronizationOnLocalVariableOrMethodParameter")
+    @Override
+    public void onContainersAllocated(List<Container> allocatedContainers) {
+      LOG_YARN.info("onContainersAllocated({})", allocatedContainers.size());
+      List<ContainerAssignment> assignments = new ArrayList<>();
+      List<AbstractRMOperation> operations = new ArrayList<>();
+
+      //app state makes all the decisions
+      appState.onContainersAllocated(
+          allocatedContainers, assignments, operations);
+
+      //for each assignment: instantiate that role
+      for (ContainerAssignment assignment : assignments) {
+        try {
+          launchService.launchRole(assignment, getInstanceDefinition(),
+              buildContainerCredentials());
+        } catch (IOException e) {
+          // Can be caused by failure to renew credentials with the remote
+          // service. If so, don't launch the application. Container is retained,
+          // though YARN will take it away after a timeout.
+          log.error("Failed to build credentials to launch container: {}", e, e);
+
+        }
+      }
+
+      //for all the operations, exec them
+      execute(operations);
+      log.info("Diagnostics: {}", getContainerDiagnosticInfo());
+    }
+
+    @Override
+    public synchronized void onContainersResourceChanged(
+        List<Container> changedContainers) {
+      LOG_YARN.info(
+          "onContainersResourceChanged([{}])", changedContainers.size());
+      List<AsyncAction> actions = new ArrayList<>();
+      appState.onContainersResourceChanged(changedContainers, actions);
+      for (AsyncAction action : actions) {
+        queue(action);
+      }
+    }
+
+    @Override
+    public synchronized void onContainersCompleted(
+        List<ContainerStatus> completedContainers) {
+      LOG_YARN.info("onContainersCompleted([{}]", completedContainers.size());
+      for (ContainerStatus status : completedContainers) {
+        ContainerId containerId = status.getContainerId();
+        LOG_YARN.info("Container Completion for" +
+                " containerID={}," +
+                " state={}," +
+                " exitStatus={}," +
+                " diagnostics={}",
+            containerId, status.getState(),
+            status.getExitStatus(),
+            status.getDiagnostics());
+
+        // non complete containers should not be here
+        assert (status.getState() == ContainerState.COMPLETE);
+        AppState.NodeCompletionResult result =
+            appState.onCompletedNode(status);
+        if (result.containerFailed) {
+          RoleInstance ri = result.roleInstance;
+          log.error("Role instance {} failed ", ri);
+        }
+
+        //  known nodes trigger notifications
+        if(!result.unknownNode) {
+          getProviderService().notifyContainerCompleted(containerId);
+          queue(new UnregisterComponentInstance(containerId, 0,
+              TimeUnit.MILLISECONDS));
+        }
+      }
+
+      reviewRequestAndReleaseNodes("onContainersCompleted");
+    }
+
+    /**
+     * RM wants to shut down the AM
+     */
+    @Override
+    public void onShutdownRequest() {
+      LOG_YARN.info("Shutdown Request received");
+      signalAMComplete(new ActionStopSlider("stop",
+          EXIT_SUCCESS,
+          FinalApplicationStatus.SUCCEEDED,
+          "Shutdown requested from RM"));
+    }
+
+    /**
+     * Monitored nodes have been changed
+     * @param updatedNodes list of updated nodes
+     */
+    @Override //AMRMClientAsync
+    public void onNodesUpdated(List<NodeReport> updatedNodes) {
+      LOG_YARN.info("onNodesUpdated({})", updatedNodes.size());
+      log.info("Updated nodes {}", updatedNodes);
+      // Check if any nodes are lost or revived and update state accordingly
+
+      AppState.NodeUpdatedOutcome outcome = appState.onNodesUpdated(updatedNodes);
+      if (!outcome.operations.isEmpty()) {
+        execute(outcome.operations);
+      }
+      // trigger a review if the cluster changed
+      if (outcome.clusterChanged) {
+        reviewRequestAndReleaseNodes("nodes updated");
+      }
+    }
+
+    /**
+     * heartbeat operation; return the ratio of requested
+     * to actual
+     * @return progress
+     */
+    @Override
+    public float getProgress() {
+      return appState.getApplicationProgressPercentage();
+    }
+
+    @Override
+    public void onError(Throwable e) {
+      //callback says it's time to finish
+      LOG_YARN.error("AMRMClientAsync.onError() received {}", e, e);
+      signalAMComplete(new ActionStopSlider("stop",
+          EXIT_EXCEPTION_THROWN,
+          FinalApplicationStatus.FAILED,
+          "AMRMClientAsync.onError() received " + e));
+    }
+  }
+
+  class NMCallbackHandler extends NMClientAsync.AbstractCallbackHandler {
+
+    @Override
+    public void onContainerStopped(ContainerId containerId) {
+      // do nothing but log: container events from the AM
+      // are the source of container halt details to react to
+      log.info("onContainerStopped {} ", containerId);
+    }
+
+    @Override
+    public void onContainerStarted(ContainerId containerId,
+        Map<String, ByteBuffer> allServiceResponse) {
+      LOG_YARN.info("Started Container {} ", containerId);
+      RoleInstance cinfo = appState.onNodeManagerContainerStarted(containerId);
+      if (cinfo != null) {
+        LOG_YARN.info("Deployed instance of role {} onto {}",
+            cinfo.role, containerId);
+        //trigger an async container status
+        nmClientAsync.getContainerStatusAsync(containerId,
+            cinfo.getHost());
+        // push out a registration
+        queue(new RegisterComponentInstance(
+            containerId, cinfo.role, 0, TimeUnit.MILLISECONDS));
+
+      } else {
+        //this is a hypothetical path not seen. We react by warning
+        log.error(
+            "Notified of started container that isn't pending {} - releasing",
+            containerId);
+        //then release it
+        asyncRMClient.releaseAssignedContainer(containerId);
+      }
+    }
+
+    @Override
+    public void onStartContainerError(ContainerId containerId, Throwable t) {
+      LOG_YARN.error("Failed to start Container {}", containerId, t);
+      appState.onNodeManagerContainerStartFailed(containerId, t);
+    }
+
+    @Override
+    public void onContainerStatusReceived(ContainerId containerId,
+        ContainerStatus containerStatus) {
+      LOG_YARN.debug("Container Status: id={}, status={}", containerId,
+          containerStatus);
+    }
+
+    @Override
+    public void onGetContainerStatusError(
+        ContainerId containerId, Throwable t) {
+      LOG_YARN.error("Failed to query the status of Container {}", containerId);
+    }
+
+    @Override
+    public void onStopContainerError(ContainerId containerId, Throwable t) {
+      LOG_YARN.warn("Failed to stop Container {}", containerId);
+    }
+
+    @Override
+    public void onContainerResourceIncreased(
+        ContainerId containerId, Resource resource) {
+      LOG_YARN.info(
+          "Successfully increased resource of container {}", containerId);
+    }
+
+    @Override
+    public void onIncreaseContainerResourceError(
+        ContainerId containerId, Throwable t) {
+      LOG_YARN.error(
+          "Failed to increase resource of container {}", containerId);
+    }
+  }
 
   /**
    * Service Constructor
@@ -720,14 +943,16 @@ public class SliderAppMaster extends AbstractSliderLaunchedService
       int heartbeatInterval = HEARTBEAT_INTERVAL;
 
       // add the RM client -this brings the callbacks in
-      asyncRMClient = AMRMClientAsync.createAMRMClientAsync(heartbeatInterval, this);
+      asyncRMClient = AMRMClientAsync.createAMRMClientAsync(
+          heartbeatInterval, new RMCallbackHandler());
       addService(asyncRMClient);
       //now bring it up
       deployChildService(asyncRMClient);
 
 
       // nmclient relays callbacks back to this class
-      nmClientAsync = new NMClientAsyncImpl("nmclient", this);
+      nmClientAsync = new NMClientAsyncImpl(
+          "nmclient", new NMCallbackHandler());
       deployChildService(nmClientAsync);
 
       // set up secret manager
@@ -1685,87 +1910,6 @@ public class SliderAppMaster extends AbstractSliderLaunchedService
     }
   }
 
-
-/* =================================================================== */
-/* AMRMClientAsync callbacks */
-/* =================================================================== */
-
-  /**
-   * Callback event when a container is allocated.
-   * 
-   * The app state is updated with the allocation, and builds up a list
-   * of assignments and RM operations. The assignments are 
-   * handed off into the pool of service launchers to asynchronously schedule
-   * container launch operations.
-   * 
-   * The operations are run in sequence; they are expected to be 0 or more
-   * release operations (to handle over-allocations)
-   * 
-   * @param allocatedContainers list of containers that are now ready to be
-   * given work.
-   */
-  @SuppressWarnings("SynchronizationOnLocalVariableOrMethodParameter")
-  @Override //AMRMClientAsync
-  public void onContainersAllocated(List<Container> allocatedContainers) {
-    LOG_YARN.info("onContainersAllocated({})", allocatedContainers.size());
-    List<ContainerAssignment> assignments = new ArrayList<>();
-    List<AbstractRMOperation> operations = new ArrayList<>();
-    
-    //app state makes all the decisions
-    appState.onContainersAllocated(allocatedContainers, assignments, operations);
-
-    //for each assignment: instantiate that role
-    for (ContainerAssignment assignment : assignments) {
-      try {
-        launchService.launchRole(assignment, getInstanceDefinition(),
-            buildContainerCredentials());
-      } catch (IOException e) {
-        // Can be caused by failure to renew credentials with the remote
-        // service. If so, don't launch the application. Container is retained,
-        // though YARN will take it away after a timeout.
-        log.error("Failed to build credentials to launch container: {}", e, e);
-
-      }
-    }
-
-    //for all the operations, exec them
-    execute(operations);
-    log.info("Diagnostics: {}", getContainerDiagnosticInfo());
-  }
-
-  @Override //AMRMClientAsync
-  public synchronized void onContainersCompleted(List<ContainerStatus> completedContainers) {
-    LOG_YARN.info("onContainersCompleted([{}]", completedContainers.size());
-    for (ContainerStatus status : completedContainers) {
-      ContainerId containerId = status.getContainerId();
-      LOG_YARN.info("Container Completion for" +
-                    " containerID={}," +
-                    " state={}," +
-                    " exitStatus={}," +
-                    " diagnostics={}",
-                    containerId, status.getState(),
-                    status.getExitStatus(),
-                    status.getDiagnostics());
-
-      // non complete containers should not be here
-      assert (status.getState() == ContainerState.COMPLETE);
-      AppState.NodeCompletionResult result = appState.onCompletedNode(status);
-      if (result.containerFailed) {
-        RoleInstance ri = result.roleInstance;
-        log.error("Role instance {} failed ", ri);
-      }
-
-      //  known nodes trigger notifications
-      if(!result.unknownNode) {
-        getProviderService().notifyContainerCompleted(containerId);
-        queue(new UnregisterComponentInstance(containerId, 0,
-            TimeUnit.MILLISECONDS));
-      }
-    }
-
-    reviewRequestAndReleaseNodes("onContainersCompleted");
-  }
-
   /**
    * Signal that containers are being upgraded. Containers specified with
    * --containers option and all containers of all roles specified with
@@ -1790,14 +1934,11 @@ public class SliderAppMaster extends AbstractSliderLaunchedService
     // If components are specified as well, then grab all the containers of
     // each of the components (roles)
     if (CollectionUtils.isNotEmpty(components)) {
-      Map<ContainerId, RoleInstance> liveContainers = appState.getLiveContainers();
-      if (CollectionUtils.isNotEmpty(liveContainers.keySet())) {
-        Map<String, Set<String>> roleContainerMap = prepareRoleContainerMap(liveContainers);
-        for (String component : components) {
-          Set<String> roleContainers = roleContainerMap.get(component);
-          if (roleContainers != null) {
-            containers.addAll(roleContainers);
-          }
+      Map<String, List<String>> roleToInstanceMap = appState.createRoleToInstanceMap();
+      for (String component : components) {
+        List<String> roleContainers = roleToInstanceMap.get(component);
+        if (roleContainers != null) {
+          containers.addAll(roleContainers);
         }
       }
     }
@@ -1808,25 +1949,6 @@ public class SliderAppMaster extends AbstractSliderLaunchedService
       agentProviderService.setInUpgradeMode(true);
       agentProviderService.addUpgradeContainers(containers);
     }
-  }
-
-  // create a reverse map of roles -> set of all live containers
-  private Map<String, Set<String>> prepareRoleContainerMap(
-      Map<ContainerId, RoleInstance> liveContainers) {
-    // liveContainers is ensured to be not empty
-    Map<String, Set<String>> roleContainerMap = new HashMap<>();
-    for (Map.Entry<ContainerId, RoleInstance> liveContainer : liveContainers
-        .entrySet()) {
-      RoleInstance role = liveContainer.getValue();
-      if (roleContainerMap.containsKey(role.role)) {
-        roleContainerMap.get(role.role).add(liveContainer.getKey().toString());
-      } else {
-        Set<String> containers = new HashSet<String>();
-        containers.add(liveContainer.getKey().toString());
-        roleContainerMap.put(role.role, containers);
-      }
-    }
-    return roleContainerMap;
   }
 
   /**
@@ -2009,58 +2131,6 @@ public class SliderAppMaster extends AbstractSliderLaunchedService
     return timeoutInMillis;
   }
 
-  /**
-   * RM wants to shut down the AM
-   */
-  @Override //AMRMClientAsync
-  public void onShutdownRequest() {
-    LOG_YARN.info("Shutdown Request received");
-    signalAMComplete(new ActionStopSlider("stop",
-        EXIT_SUCCESS,
-        FinalApplicationStatus.SUCCEEDED,
-        "Shutdown requested from RM"));
-  }
-
-  /**
-   * Monitored nodes have been changed
-   * @param updatedNodes list of updated nodes
-   */
-  @Override //AMRMClientAsync
-  public void onNodesUpdated(List<NodeReport> updatedNodes) {
-    LOG_YARN.info("onNodesUpdated({})", updatedNodes.size());
-    log.info("Updated nodes {}", updatedNodes);
-    // Check if any nodes are lost or revived and update state accordingly
-
-    AppState.NodeUpdatedOutcome outcome = appState.onNodesUpdated(updatedNodes);
-    if (!outcome.operations.isEmpty()) {
-      execute(outcome.operations);
-    }
-    // trigger a review if the cluster changed
-    if (outcome.clusterChanged) {
-      reviewRequestAndReleaseNodes("nodes updated");
-    }
-  }
-
-  /**
-   * heartbeat operation; return the ratio of requested
-   * to actual
-   * @return progress
-   */
-  @Override //AMRMClientAsync
-  public float getProgress() {
-    return appState.getApplicationProgressPercentage();
-  }
-
-  @Override //AMRMClientAsync
-  public void onError(Throwable e) {
-    //callback says it's time to finish
-    LOG_YARN.error("AMRMClientAsync.onError() received {}", e, e);
-    signalAMComplete(new ActionStopSlider("stop",
-        EXIT_EXCEPTION_THROWN,
-        FinalApplicationStatus.FAILED,
-        "AMRMClientAsync.onError() received " + e));
-  }
-  
 /* =================================================================== */
 /* RMOperationHandlerActions */
 /* =================================================================== */
@@ -2079,6 +2149,12 @@ public class SliderAppMaster extends AbstractSliderLaunchedService
   @Override
   public void addContainerRequest(AMRMClient.ContainerRequest req) {
     rmOperationHandler.addContainerRequest(req);
+  }
+
+  @Override
+  public void requestContainerResourceChange(
+      Container container, Resource capability) {
+    rmOperationHandler.requestContainerResourceChange(container, capability);
   }
 
   @Override
@@ -2219,6 +2295,11 @@ public class SliderAppMaster extends AbstractSliderLaunchedService
     return providerService.getExitCode();
   }
 
+  public void increaseContainerResource(Container container)
+      throws IOException {
+    nmClientAsync.increaseContainerResourceAsync(container);
+  }
+
   /**
    *  Async start container request
    * @param container container
@@ -2249,61 +2330,6 @@ public class SliderAppMaster extends AbstractSliderLaunchedService
           credentials);
     }
     return credentials;
-  }
-
-  @Override //  NMClientAsync.CallbackHandler 
-  public void onContainerStopped(ContainerId containerId) {
-    // do nothing but log: container events from the AM
-    // are the source of container halt details to react to
-    log.info("onContainerStopped {} ", containerId);
-  }
-
-  @Override //  NMClientAsync.CallbackHandler 
-  public void onContainerStarted(ContainerId containerId,
-      Map<String, ByteBuffer> allServiceResponse) {
-    LOG_YARN.info("Started Container {} ", containerId);
-    RoleInstance cinfo = appState.onNodeManagerContainerStarted(containerId);
-    if (cinfo != null) {
-      LOG_YARN.info("Deployed instance of role {} onto {}",
-          cinfo.role, containerId);
-      //trigger an async container status
-      nmClientAsync.getContainerStatusAsync(containerId,
-                                            cinfo.container.getNodeId());
-      // push out a registration
-      queue(new RegisterComponentInstance(containerId, cinfo.role,
-          0, TimeUnit.MILLISECONDS));
-      
-    } else {
-      //this is a hypothetical path not seen. We react by warning
-      log.error("Notified of started container that isn't pending {} - releasing",
-                containerId);
-      //then release it
-      asyncRMClient.releaseAssignedContainer(containerId);
-    }
-  }
-
-  @Override //  NMClientAsync.CallbackHandler 
-  public void onStartContainerError(ContainerId containerId, Throwable t) {
-    LOG_YARN.error("Failed to start Container {}", containerId, t);
-    appState.onNodeManagerContainerStartFailed(containerId, t);
-  }
-
-  @Override //  NMClientAsync.CallbackHandler 
-  public void onContainerStatusReceived(ContainerId containerId,
-      ContainerStatus containerStatus) {
-    LOG_YARN.debug("Container Status: id={}, status={}", containerId,
-        containerStatus);
-  }
-
-  @Override //  NMClientAsync.CallbackHandler 
-  public void onGetContainerStatusError(
-      ContainerId containerId, Throwable t) {
-    LOG_YARN.error("Failed to query the status of Container {}", containerId);
-  }
-
-  @Override //  NMClientAsync.CallbackHandler 
-  public void onStopContainerError(ContainerId containerId, Throwable t) {
-    LOG_YARN.warn("Failed to stop Container {}", containerId);
   }
 
   public AggregateConf getInstanceDefinition() {

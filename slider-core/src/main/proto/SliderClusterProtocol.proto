@@ -68,6 +68,12 @@ service SliderClusterProtocolPB {
     returns(FlexClusterResponseProto);
 
   /**
+   * change resource of a container
+   */
+  rpc resizeContainer(ResizeContainersRequestProto)
+    returns(ResizeContainersResponseProto);
+
+  /**
    * Get the current cluster status
    */
   rpc getJSONClusterStatus(GetJSONClusterStatusRequestProto)
@@ -100,21 +106,21 @@ service SliderClusterProtocolPB {
   rpc getClusterNodes(GetClusterNodesRequestProto)
     returns(GetClusterNodesResponseProto);
     
-   /**
+  /**
     * echo some text
     */
-   rpc echo(EchoRequestProto)
-     returns(EchoResponseProto); 
+  rpc echo(EchoRequestProto)
+    returns(EchoResponseProto);
 
-   /**
-    * kill a container
-    */
-   rpc killContainer(KillContainerRequestProto)
-     returns(KillContainerResponseProto);
-      
-   /**
-    * kill the AM
-    */
+  /**
+   * kill a container
+   */
+  rpc killContainer(KillContainerRequestProto)
+    returns(KillContainerResponseProto);
+
+  /**
+   * kill the AM
+   */
    rpc amSuicide(AMSuicideRequestProto)
      returns(AMSuicideResponseProto);
 

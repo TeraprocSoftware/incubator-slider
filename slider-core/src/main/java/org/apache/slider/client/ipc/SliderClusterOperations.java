@@ -22,6 +22,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import org.apache.hadoop.yarn.api.records.NodeReport;
 import org.apache.hadoop.yarn.api.records.NodeState;
+import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.slider.api.ClusterDescription;
 import org.apache.slider.api.ClusterNode;
@@ -194,6 +195,22 @@ public class SliderClusterOperations {
     Messages.KillContainerRequestProto req = builder.build();
     Messages.KillContainerResponseProto response = appMaster.killContainer(req);
     return response.getSuccess();
+  }
+
+  public boolean resizeContainer(Resource target, Collection<String> containers,
+      Collection<String> components) throws YarnException, IOException {
+    Messages.ResourceProto resource =
+        Messages.ResourceProto.newBuilder()
+            .setMemory(target.getMemory())
+            .setVirtualCores(target.getVirtualCores())
+            .build();
+    Messages.ResizeContainersRequestProto req =
+        Messages.ResizeContainersRequestProto.newBuilder()
+            .setTargetResource(resource)
+            .addAllContainer(containers)
+            .addAllComponent(components)
+            .build();
+    return appMaster.resizeContainer(req).getSuccess();
   }
 
   /**

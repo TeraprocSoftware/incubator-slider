@@ -22,6 +22,7 @@ import com.google.protobuf.RpcController;
 import com.google.protobuf.ServiceException;
 import org.apache.slider.api.SliderClusterProtocol;
 import org.apache.slider.api.proto.Messages;
+import org.apache.slider.core.exceptions.ExceptionConverter;
 
 import java.io.IOException;
 
@@ -153,7 +154,18 @@ public class SliderClusterProtocolPBImpl implements SliderClusterProtocolPB {
       throw wrap(e);
     }
   }
-  
+
+  @Override
+  public Messages.ResizeContainersResponseProto resizeContainer(
+      RpcController controller, Messages.ResizeContainersRequestProto request)
+      throws ServiceException {
+    try {
+      return real.resizeContainer(request);
+    } catch (Exception e) {
+      throw wrap(e);
+    }
+  }
+
   @Override
   public Messages.AMSuicideResponseProto amSuicide(RpcController controller,
       Messages.AMSuicideRequestProto request) throws ServiceException {

@@ -43,6 +43,7 @@ public interface SliderActions {
   String ACTION_KDIAG = "kdiag";
   String ACTION_KEYTAB = "keytab";
   String ACTION_KILL_CONTAINER = "kill-container";
+  String ACTION_RESIZE_CONTAINERS = "resize-containers";
   String ACTION_LIST = "list";
   String ACTION_LOOKUP = "lookup";
   String ACTION_NODES = "nodes";
@@ -80,6 +81,8 @@ public interface SliderActions {
   String DESCRIBE_ACTION_KDIAG = "Diagnose Kerberos problems";
   String DESCRIBE_ACTION_KILL_CONTAINER =
     "Kill a container in the application";
+  String DESCRIBE_ACTION_RESIZE_CONTAINERS =
+      "Change resource of containers in the application";
   String DESCRIBE_ACTION_HELP = "Print help information";
   String DESCRIBE_ACTION_LIST =
                   "List running Slider applications";

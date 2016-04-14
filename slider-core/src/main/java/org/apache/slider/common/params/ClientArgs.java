@@ -68,12 +68,14 @@ public class ClientArgs extends CommonArgs {
   private final ActionKDiagArgs actionKDiagArgs = new ActionKDiagArgs();
   private final ActionKeytabArgs actionKeytabArgs = new ActionKeytabArgs();
   private final ActionKillContainerArgs actionKillContainerArgs =
-    new ActionKillContainerArgs();
+      new ActionKillContainerArgs();
   private final ActionListArgs actionListArgs = new ActionListArgs();
   private final ActionLookupArgs actionLookupArgs = new ActionLookupArgs();
   private final ActionNodesArgs actionNodesArgs = new ActionNodesArgs();
   private final ActionPackageArgs actionPackageArgs = new ActionPackageArgs();
   private final ActionRegistryArgs actionRegistryArgs = new ActionRegistryArgs();
+  private final ActionResizeContainerArgs actionResizeContainerArgs =
+      new ActionResizeContainerArgs();
   private final ActionResolveArgs actionResolveArgs = new ActionResolveArgs();
   private final ActionStatusArgs actionStatusArgs = new ActionStatusArgs();
   private final ActionThawArgs actionThawArgs = new ActionThawArgs();
@@ -115,6 +117,7 @@ public class ClientArgs extends CommonArgs {
         actionNodesArgs,
         actionPackageArgs,
         actionRegistryArgs,
+        actionResizeContainerArgs,
         actionResolveArgs,
         actionStatusArgs,
         actionThawArgs,
@@ -205,6 +208,10 @@ public class ClientArgs extends CommonArgs {
 
   public ActionKillContainerArgs getActionKillContainerArgs() {
     return actionKillContainerArgs;
+  }
+
+  public ActionResizeContainerArgs getActionResizeContainerArgs() {
+    return actionResizeContainerArgs;
   }
 
   public ActionListArgs getActionListArgs() {
@@ -320,6 +327,10 @@ public class ClientArgs extends CommonArgs {
 
       case ACTION_KILL_CONTAINER:
         bindCoreAction(actionKillContainerArgs);
+        break;
+
+      case ACTION_RESIZE_CONTAINERS:
+        bindCoreAction(actionResizeContainerArgs);
         break;
 
       case ACTION_LIST:

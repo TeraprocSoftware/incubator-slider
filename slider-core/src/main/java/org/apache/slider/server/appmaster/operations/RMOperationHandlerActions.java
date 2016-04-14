@@ -18,8 +18,10 @@
 
 package org.apache.slider.server.appmaster.operations;
 
+import org.apache.hadoop.yarn.api.records.Container;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.Priority;
+import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.client.api.AMRMClient;
 
 import java.util.List;
@@ -37,6 +39,13 @@ public interface RMOperationHandlerActions {
    * @param request
    */
   void addContainerRequest(AMRMClient.ContainerRequest request);
+
+  /**
+   * Issue a container resource change request
+   * @param container the existing container
+   * @param capability the target resource capability
+   */
+  void requestContainerResourceChange(Container container, Resource capability);
 
   /**
    * Cancel a specific request

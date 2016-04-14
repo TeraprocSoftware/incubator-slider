@@ -23,7 +23,7 @@ import org.apache.hadoop.yarn.api.records.NodeId
 import org.apache.hadoop.yarn.api.records.NodeReport
 import org.apache.hadoop.yarn.api.records.NodeState
 import org.apache.hadoop.yarn.api.records.Resource
-
+import org.apache.hadoop.yarn.api.records.ResourceUtilization
 /**
  * Node report for testing
  */
@@ -39,6 +39,8 @@ class MockNodeReport extends NodeReport {
   String healthReport;
   long lastHealthReportTime;
   Set<String> nodeLabels;
+  ResourceUtilization aggregatedContainersUtilization;
+  ResourceUtilization nodeUtilization;
 
   MockNodeReport() {
   }

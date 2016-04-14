@@ -18,6 +18,7 @@
 
 package org.apache.slider.server.appmaster.operations;
 
+import org.apache.hadoop.yarn.api.records.Container;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.Priority;
 import org.apache.hadoop.yarn.api.records.Resource;
@@ -100,6 +101,12 @@ public class AsyncRMOperationHandler extends RMOperationHandler {
     log.debug("Releasing container {}", containerId);
 
     client.releaseAssignedContainer(containerId);
+  }
+
+  @Override
+  public void requestContainerResourceChange(
+      Container container, Resource capability) {
+    client.requestContainerResourceChange(container, capability);
   }
 
   @Override

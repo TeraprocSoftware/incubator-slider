@@ -203,6 +203,17 @@ public class SliderClusterProtocolProxy implements SliderClusterProtocol {
   }
 
   @Override
+  public Messages.ResizeContainersResponseProto resizeContainer(
+      Messages.ResizeContainersRequestProto request)
+      throws YarnException, IOException {
+    try {
+      return endpoint.resizeContainer(NULL_CONTROLLER, request);
+    } catch (ServiceException e) {
+      throw convert(e);
+    }
+  }
+
+  @Override
   public Messages.AMSuicideResponseProto amSuicide(Messages.AMSuicideRequestProto request) throws
                                                                                            IOException {
     try {

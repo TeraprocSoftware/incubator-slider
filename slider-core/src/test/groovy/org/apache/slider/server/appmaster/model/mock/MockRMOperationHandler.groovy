@@ -19,10 +19,13 @@
 package org.apache.slider.server.appmaster.model.mock
 
 import groovy.util.logging.Slf4j
+import org.apache.hadoop.yarn.api.records.Container
 import org.apache.hadoop.yarn.api.records.ContainerId
 import org.apache.hadoop.yarn.api.records.Priority
+import org.apache.hadoop.yarn.api.records.Resource
 import org.apache.hadoop.yarn.client.api.AMRMClient
 import org.apache.slider.server.appmaster.operations.AbstractRMOperation
+import org.apache.slider.server.appmaster.operations.ContainerChangeRequestOperation
 import org.apache.slider.server.appmaster.operations.ContainerReleaseOperation
 import org.apache.slider.server.appmaster.operations.ContainerRequestOperation
 import org.apache.slider.server.appmaster.operations.RMOperationHandler
@@ -47,6 +50,16 @@ class MockRMOperationHandler extends RMOperationHandler {
   public void addContainerRequest(AMRMClient.ContainerRequest req) {
     operations.add(new ContainerRequestOperation(req))
     log.info("Requesting container role #" + req.priority);
+    requests++;
+  }
+
+  @Override
+  public void requestContainerResourceChange(
+      Container container, Resource capability) {
+    operations.add(new ContainerChangeRequestOperation(container, capability));
+    log.info("Requesting resource change for container "
+        + container.getId() + " from " + container.getResource()
+            + " to " + capability);
     requests++;
   }
 

@@ -18,8 +18,10 @@
 
 package org.apache.slider.server.appmaster.operations;
 
+import org.apache.hadoop.yarn.api.records.Container;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.Priority;
+import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.client.api.AMRMClient;
 import org.apache.slider.providers.ProviderService;
 
@@ -39,6 +41,12 @@ public class ProviderNotifyingOperationHandler extends RMOperationHandler {
   @Override
   public void addContainerRequest(AMRMClient.ContainerRequest req) {
     providerService.addContainerRequest(req);
+  }
+
+  @Override
+  public void requestContainerResourceChange(
+      Container container, Resource capability) {
+    providerService.requestContainerResourceChange(container, capability);
   }
 
   @Override
